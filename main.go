@@ -6,11 +6,13 @@ import (
 	"html/template"
 	"log"
 	"net/http"
-	"github.com/gorilla/websocket"
+
 	"github.com/gorilla/mux"
+	"github.com/gorilla/websocket"
 )
 
 type AppConfigProperties map[string]string
+
 var addr string
 var upgrader = websocket.Upgrader{
 	CheckOrigin: func(r *http.Request) bool {
@@ -23,6 +25,7 @@ var sourceAdd chan struct{}
 var sinkAdd chan struct{}
 var antiPoller struct{}
 var path = ""
+var urlparam = ""
 
 func init() {
 	flag.StringVar(&addr, "addr", "0.0.0.0:8080", "link address")
@@ -55,7 +58,7 @@ func main() {
 	go readFromSource()
 	go writeToSink()
 	r.HandleFunc("/source", source)
-	r.HandleFunc("/path/",handleGet)
+	r.HandleFunc("/path/", handleGet)
 	r.HandleFunc("/sink", sink)
 	r.HandleFunc("/{userPath}", home)
 	log.Fatal(http.ListenAndServe(addr, r))
@@ -66,11 +69,12 @@ func main() {
 func home(w http.ResponseWriter, r *http.Request) {
 	log.Printf("serving static page.")
 	params := mux.Vars(r)
-	log.Println("Url Param 'key' is: " + params["userPath"]+ "   "+path)
+	log.Println("Url Param 'key' is: " + params["userPath"] + "   " + path)
+	urlparam = params["userPath"]
 	if params["userPath"] == path {
-	homeTemplate.Execute(w, "ws://"+r.Host+"/sink")
+		homeTemplate.Execute(w, "ws://"+r.Host+"/sink")
 	} else {
-		http.Error(w, "Page not found", 404 )
+		http.Error(w, "Page not found", 404)
 	}
 }
 
@@ -91,12 +95,12 @@ func source(w http.ResponseWriter, r *http.Request) {
 
 }
 
-func handleGet(w http.ResponseWriter, r *http.Request){
+func handleGet(w http.ResponseWriter, r *http.Request) {
 	keys, ok := r.URL.Query()["servingPath"]
-    
-    if !ok || len(keys) < 1 {
-        log.Println("Url Param 'servingPath' is missing")
-    }
+
+	if !ok || len(keys) < 1 {
+		log.Println("Url Param 'servingPath' is missing")
+	}
 
 	path = keys[0]
 }
@@ -122,23 +126,25 @@ func sink(w http.ResponseWriter, r *http.Request) {
 func readFromSource() {
 	<-sourceAdd
 	for {
-		log.Println("Start source read message.")
+		log.Println("Read from source ===> Start source read message.")
 		mtype, mesg, err := pipe.sourceConn.ReadMessage()
 		if err != nil {
 			if websocket.IsUnexpectedCloseError(err, websocket.CloseGoingAway, websocket.CloseAbnormalClosure) {
-				log.Printf("error: %v", err)
+				log.Printf("Read from source ===> Unexpected error: %v", err)
 			}
-			log.Println("Error in conn. Waiting for new source.")
+			log.Println("Read from source ===> Error in conn. Waiting for new source.")
 			<-sourceAdd
 		}
-		//log.Println("Done read message.")
+		log.Println("Read from source ===> Done read message.")
+		log.Println("Read from source ===> " + string(mtype))
 		m := Message{
 			message: mesg,
 			mt:      mtype,
 		}
 		pipe.pipeChan <- m
-		log.Println("Done  source read message.")
+		log.Println("Read from source ===> Done  source read message.")
 	}
+	log.Println("Read from source ===> For loop exited")
 }
 
 func writeToSink() {
@@ -147,20 +153,24 @@ func writeToSink() {
 		m := <-pipe.pipeChan
 
 		for i, c := range pipe.sinkConn {
-			log.Printf("Start sink read message. %d\n", m.mt)
+			log.Printf("Write to sink ===> Start sink read message. %d\n", m.mt)
+			log.Printf("Write to sink ===> socked %s\n", c.RemoteAddr())
+			//if path == urlparam {
 			err := c.WriteMessage(m.mt, m.message)
 			if err != nil {
 				if websocket.IsUnexpectedCloseError(err, websocket.CloseGoingAway, websocket.CloseAbnormalClosure) {
 					pipe.sinkConn = append(pipe.sinkConn[:i], pipe.sinkConn[(i+1):]...)
-					log.Printf("error: %v", err)
+					log.Printf("Write to sink ===> Here error: %v\n", err)
 				}
-				fmt.Printf("Here :%v\n", err)
+				//}
+				fmt.Printf("Write to sink ===> Here continue error :%v\n", err)
 				continue
 			}
-			log.Println("Done sink sending message.")
+			log.Println("Write to sink ===> Done sink sending message.")
 		}
 
 	}
+	log.Println("Write to sink ===> For loop exited")
 }
 
 var homeTemplate = template.Must(template.New("").Parse(`
@@ -200,7 +210,6 @@ var homeTemplate = template.Must(template.New("").Parse(`
 </html>
 
 	`))
-
 
 /*
 img, err := png.Decode(bytes.NewReader(message))
