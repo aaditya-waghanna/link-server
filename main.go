@@ -19,8 +19,10 @@ var upgrader = websocket.Upgrader{
 		return true
 	},
 }
-var sourceConn *websocket.Conn
-var sinkConn []*websocket.Conn
+//var sourceConn *websocket.Conn
+//var sinkConn []*websocket.Conn
+var sourceAdd chan struct{}
+var sinkAdd chan struct{}
 var antiPoller struct{}
 var path = ""
 var urlparam = ""
@@ -33,8 +35,8 @@ type Pipe struct {
 	sourceConn *websocket.Conn
 	sinkConn   []*websocket.Conn
 	pipeChan   chan Message
-	sourceAdd chan struct{}
-	sinkAdd chan struct{}
+	//sourceAdd chan struct{}
+	//sinkAdd chan struct{}
 }
 
 type Message struct {
@@ -42,7 +44,7 @@ type Message struct {
 	mt      int
 }
 
-var pipe Pipe
+//var pipe Pipe
 
 func main() {
 	r := mux.NewRouter()
@@ -53,8 +55,8 @@ func main() {
 	}*/
 	pathMap = make(map[string]Pipe)
 	//sourceToSink := make(chan Message, 1)
-	//sourceAdd = make(chan struct{})
-	//sinkAdd = make(chan struct{})
+	sourceAdd = make(chan struct{})
+	sinkAdd = make(chan struct{})
 	//pipe.pipeChan = sourceToSink
 	//go readFromSource()
 	//go writeToSink()
@@ -98,16 +100,16 @@ func source(w http.ResponseWriter, r *http.Request) {
 			sourceConn: s,
 			sinkConn:   nil,
 		}
-		pipeObj.sourceAdd =make(chan struct{})
-		pipeObj.sinkAdd =make(chan struct{})
+		//pipeObj.sourceAdd =make(chan struct{})
+		//pipeObj.sinkAdd =make(chan struct{})
 		pipeObj.pipeChan = make(chan Message, 1)
 		pipeConn = pipeObj
 		pathMap[sourcePath] = pipeConn
 		log.Printf("starting go routines")
-		go readFromSource(pipeConn)
-		go writeToSink(pipeConn)
+		go readFromSource(sourcePath)
+		go writeToSink(sourcePath)
 		path = sourcePath
-		pipeConn.sourceAdd <- antiPoller
+		sourceAdd <- antiPoller
 
 
 	//	defer s.Close()
@@ -128,7 +130,7 @@ func sink(w http.ResponseWriter, r *http.Request) {
 	if exist{
 		log.Printf("Streaming availaible at path " + keys)
 		pipeConn.sinkConn = append(pipeConn.sinkConn,s)
-		pipeConn.sinkAdd <- antiPoller
+		sinkAdd <- antiPoller
 	} else {
 
 			log.Fatalf("upgrade:", err)
@@ -161,8 +163,9 @@ func sink(w http.ResponseWriter, r *http.Request) {
 	//	select {}
 }
 
-func readFromSource(pipeObj Pipe) {
-	<-pipeObj.sourceAdd
+func readFromSource(tempPath string) {
+	pipeObj,_ := pathMap[tempPath]
+	<-sourceAdd
 	for {
 		log.Println("Read from source ===> Start source read message.")
 		mtype, mesg, err := pipeObj.sourceConn.ReadMessage()
@@ -170,6 +173,7 @@ func readFromSource(pipeObj Pipe) {
 			if websocket.IsUnexpectedCloseError(err, websocket.CloseGoingAway, websocket.CloseAbnormalClosure) {
 				log.Printf("Read from source ===> Unexpected error: %v", err)
 				pipeObj.sourceConn = nil
+				delete(pathMap, tempPath)
 				return
 			}
 			log.Println("Read from source ===> Error in conn. Waiting for new source.")
@@ -211,21 +215,22 @@ func readFromSource(pipeObj Pipe) {
 	log.Println("Read from source ===> For loop exited")*/
 }
 
-func writeToSink(pipeObj Pipe) {
+func writeToSink(incPath string) {
 
+	pipeObj,_ := pathMap[incPath]
 
-	<-pipeObj.sinkAdd
+	<-sinkAdd
 	for {
 		m := <-pipeObj.pipeChan
 
-		for i, c := range pipe.sinkConn {
+		for i, c := range pipeObj.sinkConn {
 			log.Printf("Write to sink ===> Start sink read message. %d\n", m.mt)
 			log.Printf("Write to sink ===> socked %s\n", c.RemoteAddr())
 			if path == urlparam {
 				err := c.WriteMessage(m.mt, m.message)
 				if err != nil {
 					if websocket.IsUnexpectedCloseError(err, websocket.CloseGoingAway, websocket.CloseAbnormalClosure) {
-						pipeObj.sinkConn = append(pipe.sinkConn[:i], pipe.sinkConn[(i+1):]...)
+						pipeObj.sinkConn = append(pipeObj.sinkConn[:i], pipeObj.sinkConn[(i+1):]...)
 						log.Printf("Write to sink ===> Here error: %v\n", err)
 					}
 				}
@@ -303,7 +308,7 @@ var homeTemplate = template.Must(template.New("").Parse(`
 	`))
 
 /*
-img, err := png.Decode(bytes.NewReader(message))
+img, err  := png.Decode(bytes.NewReader(message))
 			fileName := fmt.Sprintf("%s.png", time.Now().String())
 			log.Printf("Writing %d bytes to %s", len(message), fileName)
 			file, err := os.Create(fileName)
