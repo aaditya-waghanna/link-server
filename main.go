@@ -22,13 +22,14 @@ var upgrader = websocket.Upgrader{
 }
 var sourceAdd chan struct{}
 var sinkAdd chan struct{}
+var hold chan struct{}
 var terminateRoutineForPath chan string
 var antiPoller struct{}
 var path = ""
 var urlparam = ""
 
 func init() {
-	flag.StringVar(&addr, "addr", "0.0.0.0:8080", "link address")
+	flag.StringVar(&addr, "addr", "0.0.0.0:8081", "link address")
 }
 
 type Pipe struct {
@@ -48,6 +49,7 @@ func main() {
 	pathMap = make(map[string]*Pipe)
 	sourceAdd = make(chan struct{})
 	sinkAdd = make(chan struct{})
+	hold = make(chan struct{})
 	terminateRoutineForPath = make(chan string)
 	r.HandleFunc("/source/{sourcePath}", source)
 	r.HandleFunc("/sink/{browserPath}", sink)
@@ -80,6 +82,7 @@ func source(w http.ResponseWriter, r *http.Request) {
 		log.Printf("The path already exists closing existing connection " + sourcePath)
 		pipeConn.sourceConn.Close()
 		delete(pathMap, sourcePath)
+		//sourceAdd <- antiPoller
 	}
 	s, err := upgrader.Upgrade(w, r, nil)
 	if err != nil {
@@ -95,8 +98,10 @@ func source(w http.ResponseWriter, r *http.Request) {
 	log.Printf("starting go routines")
 	go readFromSource(sourcePath)
 	go writeToSink(sourcePath)
-	path = sourcePath
 	sourceAdd <- antiPoller
+	sinkAdd <- antiPoller
+	//path = sourcePath
+	//sourceAdd <- antiPoller
 
 }
 
@@ -113,8 +118,9 @@ func sink(w http.ResponseWriter, r *http.Request) {
 	if exist {
 		log.Printf("Streaming availaible at path " + keys)
 		pipeConn.sinkConn = append(pipeConn.sinkConn, s)
-		pathMap[keys] = pipeConn
-		sinkAdd <- antiPoller
+		//pathMap[keys] = pipeConn
+		//sinkAdd <- antiPoller
+
 	} else {
 
 		log.Fatalf("upgrade:", err)
@@ -122,13 +128,17 @@ func sink(w http.ResponseWriter, r *http.Request) {
 	}
 	temp := pathMap[keys]
 	log.Printf("length of temp at sink " + strconv.Itoa(len(temp.sinkConn)))
+	sinkAdd <- antiPoller
 }
 
 func readFromSource(tempPath string) {
+	log.Printf("read from source started ")
 	pipeObj, _ := pathMap[tempPath]
+	//var first = true
 	<-sourceAdd
+	log.Println("Source Added Succefully")
 	for {
-		//log.Println("Read from source ===> Start source read message.")
+
 		mtype, mesg, err := pipeObj.sourceConn.ReadMessage()
 		if err != nil {
 			if websocket.IsUnexpectedCloseError(err, websocket.CloseGoingAway, websocket.CloseAbnormalClosure) {
@@ -141,6 +151,7 @@ func readFromSource(tempPath string) {
 			}
 			log.Println("Read from source ===> Error in conn. Waiting for new source.")
 			pipeObj.sourceConn = nil
+			pipeObj.sinkConn = nil
 			delete(pathMap, tempPath)
 			terminateRoutineForPath <- tempPath
 			log.Printf("terminating go routine readfromsource for path " + tempPath)
@@ -153,16 +164,21 @@ func readFromSource(tempPath string) {
 			mt:      mtype,
 		}
 		pipeObj.pipeChan <- m
+		//if (first){
+		//	log.Printf("in if loop ")
+		//	first = false
+		//	sinkAdd <- antiPoller
+		//}
 		//log.Println("Read from source ===> Done  source read message.")
 	}
+	log.Println("out of loop ")
 }
 
 func writeToSink(incPath string) {
-
+	log.Printf("write to sink started")
 	pipeObj, _ := pathMap[incPath]
 	<-sinkAdd
-	log.Printf("write to sink started")
-	log.Printf("length is" + strconv.Itoa(len(pipeObj.sinkConn)))
+	log.Printf("writetosink sink add notified")
 	for {
 		select {
 
@@ -176,9 +192,11 @@ func writeToSink(incPath string) {
 				err := c.WriteMessage(m.mt, m.message)
 				if err != nil {
 					if websocket.IsUnexpectedCloseError(err, websocket.CloseGoingAway, websocket.CloseAbnormalClosure) {
-						pipeObj.sinkConn = append(pipeObj.sinkConn[:i], pipeObj.sinkConn[(i + 1):]...)
-						//log.Printf("Write to sink ===> Here error: %v\n", err)
+						//pipeObj.sinkConn = append(pipeObj.sinkConn[:i], pipeObj.sinkConn[(i + 1):]...)
+						log.Printf("Write to sink ===> Here error: %v\n", err)
 					}
+					log.Println("Write to sink ===> some error")
+					pipeObj.sinkConn = append(pipeObj.sinkConn[:i], pipeObj.sinkConn[(i + 1):]...)
 				}
 				//fmt.Printf("Write to sink ===> Here continue error :%v\n", err)
 				continue
