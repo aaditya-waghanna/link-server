@@ -5,10 +5,10 @@ import (
 	"html/template"
 	"log"
 	"net/http"
-
 	"github.com/gorilla/mux"
 	"github.com/gorilla/websocket"
 	"strconv"
+	"github.com/dustin/go-broadcast"
 )
 
 type AppConfigProperties map[string]string
@@ -36,6 +36,7 @@ type Pipe struct {
 	sourceConn *websocket.Conn
 	sinkConn   []*websocket.Conn
 	pipeChan   chan Message
+	b broadcast.Broadcaster
 }
 
 type Message struct {
@@ -94,10 +95,11 @@ func source(w http.ResponseWriter, r *http.Request) {
 		sinkConn:   nil,
 	}
 	pipeObj.pipeChan = make(chan Message, 1)
+	pipeObj.b = broadcast.NewBroadcaster(1)
 	pathMap[sourcePath] = &pipeObj
 	log.Printf("starting go routines")
 	go readFromSource(sourcePath)
-	go writeToSink(sourcePath)
+	//go writeToSink(sourcePath)
 	sourceAdd <- antiPoller
 	sinkAdd <- antiPoller
 	//path = sourcePath
@@ -118,6 +120,7 @@ func sink(w http.ResponseWriter, r *http.Request) {
 	if exist {
 		log.Printf("Streaming availaible at path " + keys)
 		pipeConn.sinkConn = append(pipeConn.sinkConn, s)
+		go writeToBrowser(s,keys,pipeConn.b)
 		//pathMap[keys] = pipeConn
 		//sinkAdd <- antiPoller
 
@@ -164,45 +167,30 @@ func readFromSource(tempPath string) {
 			mt:      mtype,
 		}
 		pipeObj.pipeChan <- m
-		//if (first){
-		//	log.Printf("in if loop ")
-		//	first = false
-		//	sinkAdd <- antiPoller
-		//}
-		//log.Println("Read from source ===> Done  source read message.")
+		pipeObj.b.Submit(m)
+
 	}
 	log.Println("out of loop ")
 }
 
-func writeToSink(incPath string) {
-	log.Printf("write to sink started")
-	pipeObj, _ := pathMap[incPath]
-	<-sinkAdd
-	log.Printf("writetosink sink add notified")
+func writeToBrowser(browserConn   *websocket.Conn,incPath string,b broadcast.Broadcaster){
+	pipeObj := make(chan interface{})
+	b.Register(pipeObj)
+	//pipeObj, _ := pathMap[incPath]
 	for {
 		select {
-
-
-		case m := <-pipeObj.pipeChan:
-
-			for i, c := range pipeObj.sinkConn {
-				//log.Printf("Write to sink ===> Start sink read message. %d\n", m.mt)
-				//log.Printf("Write to sink ===> socked %s\n", c.RemoteAddr())
-				//if path == urlparam {
-				err := c.WriteMessage(m.mt, m.message)
-				if err != nil {
-					if websocket.IsUnexpectedCloseError(err, websocket.CloseGoingAway, websocket.CloseAbnormalClosure) {
-						//pipeObj.sinkConn = append(pipeObj.sinkConn[:i], pipeObj.sinkConn[(i + 1):]...)
-						log.Printf("Write to sink ===> Here error: %v\n", err)
-					}
-					log.Println("Write to sink ===> some error")
-					pipeObj.sinkConn = append(pipeObj.sinkConn[:i], pipeObj.sinkConn[(i + 1):]...)
+		// here is the problem. i am unable to fetch Message from the broadcaster.
+		case m := <-pipeObj:
+			err := browserConn.WriteMessage(m.mt, m.message)
+			if err != nil {
+				if websocket.IsUnexpectedCloseError(err, websocket.CloseGoingAway, websocket.CloseAbnormalClosure) {
+					//pipeObj.sinkConn = append(pipeObj.sinkConn[:i], pipeObj.sinkConn[(i + 1):]...)
+					log.Printf("Write to sink ===> Here error: %v\n", err)
 				}
-				//fmt.Printf("Write to sink ===> Here continue error :%v\n", err)
-				continue
-				//}
-				//log.Println("Write to sink ===> Done sink sending message.")
+				log.Println("Write to sink ===> some error")
+				return
 			}
+
 		case terminationPath := <-terminateRoutineForPath:
 			if terminationPath == incPath {
 				log.Printf("terminating go routine writetosink for path " + terminationPath)
@@ -211,9 +199,9 @@ func writeToSink(incPath string) {
 
 		}
 	}
-	log.Println("Write to sink ===> For loop exited")
-
 }
+
+
 
 var homeTemplate = template.Must(template.New("").Parse(`
 	<!DOCTYPE html>
