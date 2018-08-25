@@ -34,7 +34,7 @@ func init() {
 
 type Pipe struct {
 	sourceConn *websocket.Conn
-	sinkConn   []*websocket.Conn
+	sinkConn   []chan Message
 	pipeChan   chan Message
 }
 
@@ -110,6 +110,7 @@ func sink(w http.ResponseWriter, r *http.Request) {
 	keys := params["browserPath"]
 	log.Printf("Viewer recieved at path:: " + keys)
 	pipeConn, exist := pathMap[keys]
+	browserPipe :=make(chan Message, 1)
 	s, err := upgrader.Upgrade(w, r, nil)
 	if err != nil {
 		log.Print("upgrade:", err)
@@ -117,7 +118,9 @@ func sink(w http.ResponseWriter, r *http.Request) {
 	}
 	if exist {
 		log.Printf("Streaming availaible at path " + keys)
-		pipeConn.sinkConn = append(pipeConn.sinkConn, s)
+		pipeConn.sinkConn = append(pipeConn.sinkConn, browserPipe)
+
+		go writeToBrowser(s,keys,browserPipe)
 		//pathMap[keys] = pipeConn
 		//sinkAdd <- antiPoller
 
@@ -174,6 +177,41 @@ func readFromSource(tempPath string) {
 	log.Println("out of loop ")
 }
 
+func writeToBrowser(browserConn   *websocket.Conn,incPath string,pipeObj chan Message){
+	//pipeObj, _ := pathMap[incPath]
+	for {
+		select {
+
+
+		case m := <-pipeObj:
+
+
+				//log.Printf("Write to sink ===> Start sink read message. %d\n", m.mt)
+				//log.Printf("Write to sink ===> socked %s\n", c.RemoteAddr())
+				//if path == urlparam {
+				err := browserConn.WriteMessage(m.mt, m.message)
+				if err != nil {
+					if websocket.IsUnexpectedCloseError(err, websocket.CloseGoingAway, websocket.CloseAbnormalClosure) {
+						//pipeObj.sinkConn = append(pipeObj.sinkConn[:i], pipeObj.sinkConn[(i + 1):]...)
+						log.Printf("Write to sink ===> Here error: %v\n", err)
+					}
+					log.Println("Write to sink ===> some error")
+					return
+				}
+				//fmt.Printf("Write to sink ===> Here continue error :%v\n", err)
+				//}
+				//log.Println("Write to sink ===> Done sink sending message.")
+
+		case terminationPath := <-terminateRoutineForPath:
+			if terminationPath == incPath {
+				log.Printf("terminating go routine writetosink for path " + terminationPath)
+				return
+			}
+
+		}
+	}
+}
+
 func writeToSink(incPath string) {
 	log.Printf("write to sink started")
 	pipeObj, _ := pathMap[incPath]
@@ -185,23 +223,9 @@ func writeToSink(incPath string) {
 
 		case m := <-pipeObj.pipeChan:
 
-			for i, c := range pipeObj.sinkConn {
-				//log.Printf("Write to sink ===> Start sink read message. %d\n", m.mt)
-				//log.Printf("Write to sink ===> socked %s\n", c.RemoteAddr())
-				//if path == urlparam {
-				err := c.WriteMessage(m.mt, m.message)
-				if err != nil {
-					if websocket.IsUnexpectedCloseError(err, websocket.CloseGoingAway, websocket.CloseAbnormalClosure) {
-						//pipeObj.sinkConn = append(pipeObj.sinkConn[:i], pipeObj.sinkConn[(i + 1):]...)
-						log.Printf("Write to sink ===> Here error: %v\n", err)
-					}
-					log.Println("Write to sink ===> some error")
-					pipeObj.sinkConn = append(pipeObj.sinkConn[:i], pipeObj.sinkConn[(i + 1):]...)
-				}
-				//fmt.Printf("Write to sink ===> Here continue error :%v\n", err)
-				continue
-				//}
-				//log.Println("Write to sink ===> Done sink sending message.")
+			for _, c := range pipeObj.sinkConn {
+
+				c<-m
 			}
 		case terminationPath := <-terminateRoutineForPath:
 			if terminationPath == incPath {
