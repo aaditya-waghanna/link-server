@@ -166,7 +166,7 @@ func readFromSource(tempPath string) {
 			message: mesg,
 			mt:      mtype,
 		}
-		pipeObj.pipeChan <- m
+		//pipeObj.pipeChan <- m
 		pipeObj.b.Submit(m)
 
 	}
@@ -180,13 +180,15 @@ func writeToBrowser(browserConn   *websocket.Conn,incPath string,b broadcast.Bro
 	for {
 		select {
 		// here is the problem. i am unable to fetch Message from the broadcaster.
-		case m := <-pipeObj:
+		case f := <-pipeObj:
+			m := f.(Message)
 			err := browserConn.WriteMessage(m.mt, m.message)
 			if err != nil {
 				if websocket.IsUnexpectedCloseError(err, websocket.CloseGoingAway, websocket.CloseAbnormalClosure) {
 					//pipeObj.sinkConn = append(pipeObj.sinkConn[:i], pipeObj.sinkConn[(i + 1):]...)
 					log.Printf("Write to sink ===> Here error: %v\n", err)
 				}
+				b.Unregister(pipeObj)
 				log.Println("Write to sink ===> some error")
 				return
 			}
